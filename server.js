@@ -1,27 +1,19 @@
-// ===================================
+// =======================================
 // ARIF VISA AUTO FILL PRO
-// PASSPORT OCR API SERVER
-// ===================================
+// API SERVER v3.0
+// NON-MRZ PASSPORT OCR
+// =======================================
 
 const express = require("express");
 const multer = require("multer");
 const cors = require("cors");
-const Tesseract = require("tesseract.js");
+const sharp = require("sharp");
+const { createWorker } = require("tesseract.js");
 
 const app = express();
 
-
-// ===================================
-// MIDDLEWARE
-// ===================================
-
 app.use(cors());
 app.use(express.json());
-
-
-// ===================================
-// FILE UPLOAD
-// ===================================
 
 const upload = multer({
     storage: multer.memoryStorage(),
@@ -31,167 +23,439 @@ const upload = multer({
 });
 
 
-// ===================================
-// TEST API
-// ===================================
+// =======================================
+// HOME / STATUS
+// =======================================
 
 app.get("/", (req, res) => {
 
     res.json({
+
         status: "ARIF VISA API RUNNING",
-        version: "2.0.0",
-        ocr: "READY"
+
+        version: "3.0.0",
+
+        ocr: "READY",
+
+        mode: "NON-MRZ + MRZ"
+
     });
 
 });
 
 
-// ===================================
-// PASSPORT MRZ PARSER
-// ===================================
+// =======================================
+// CLEAN OCR TEXT
+// =======================================
 
-function parseMRZ(text) {
+function cleanText(text) {
 
-    const clean = text
-        .toUpperCase()
-        .replace(/[^A-Z0-9<\n]/g, "");
-
-
-    const lines = clean
-        .split("\n")
-        .map(line => line.trim())
-        .filter(line => line.length >= 30);
-
-
-    let mrz1 = "";
-    let mrz2 = "";
-
-
-    for (let i = 0; i < lines.length; i++) {
-
-        if (
-            lines[i].startsWith("P") &&
-            lines[i].length >= 40
-        ) {
-
-            mrz1 = lines[i];
-
-            if (lines[i + 1]) {
-                mrz2 = lines[i + 1];
-            }
-
-            break;
-        }
-    }
-
-
-    if (!mrz1 || !mrz2) {
-
-        return {
-            found: false,
-            name: "",
-            passportNo: "",
-            dob: "",
-            nationality: "",
-            sex: "",
-            expiry: ""
-        };
-
-    }
-
-
-    // ===================================
-    // PASSPORT NUMBER
-    // ===================================
-
-    const passportNo =
-        mrz2
-            .substring(0, 9)
-            .replace(/</g, "")
-            .trim();
-
-
-    // ===================================
-    // NATIONALITY
-    // ===================================
-
-    const nationality =
-        mrz2.substring(10, 13);
-
-
-    // ===================================
-    // DATE OF BIRTH
-    // ===================================
-
-    const dobRaw =
-        mrz2.substring(13, 19);
-
-
-    // ===================================
-    // SEX
-    // ===================================
-
-    const sex =
-        mrz2.substring(20, 21);
-
-
-    // ===================================
-    // EXPIRY DATE
-    // ===================================
-
-    const expiryRaw =
-        mrz2.substring(21, 27);
-
-
-    // ===================================
-    // NAME
-    // ===================================
-
-    let name = "";
-
-    const namePart =
-        mrz1.substring(5);
-
-    const nameSections =
-        namePart.split("<<");
-
-
-    if (nameSections.length > 0) {
-
-        name =
-            nameSections
-                .join(" ")
-                .replace(/</g, " ")
-                .replace(/\s+/g, " ")
-                .trim();
-
-    }
-
-
-    return {
-
-        found: true,
-
-        name: name,
-
-        passportNo: passportNo,
-
-        dob: dobRaw,
-
-        nationality: nationality,
-
-        sex: sex,
-
-        expiry: expiryRaw
-
-    };
+    return text
+        .replace(/\r/g, "\n")
+        .replace(/[|]/g, "I")
+        .replace(/[“”]/g, '"')
+        .replace(/[‘’]/g, "'")
+        .replace(/[ \t]+/g, " ")
+        .replace(/\n{2,}/g, "\n")
+        .trim();
 
 }
 
 
-// ===================================
-// READ PASSPORT API
-// ===================================
+// =======================================
+// NORMALIZE FIELD
+// =======================================
+
+function normalize(value) {
+
+    if (!value) return "";
+
+    return value
+        .replace(/[^A-Z0-9 .,'-]/gi, "")
+        .replace(/\s+/g, " ")
+        .trim();
+
+}
+
+
+// =======================================
+// PASSPORT NUMBER
+// =======================================
+
+function findPassportNumber(text) {
+
+    const patterns = [
+
+        /PASSPORT\s*(?:NO|NUMBER)?\s*[:\-]?\s*([A-Z][A-Z0-9]{6,9})/i,
+
+        /DOCUMENT\s*(?:NO|NUMBER)?\s*[:\-]?\s*([A-Z][A-Z0-9]{6,9})/i,
+
+        /\b([A-Z][0-9]{7,8})\b/
+
+    ];
+
+    for (const pattern of patterns) {
+
+        const match = text.match(pattern);
+
+        if (match && match[1]) {
+
+            return match[1]
+                .replace(/\s/g, "")
+                .toUpperCase();
+
+        }
+
+    }
+
+    return "";
+
+}
+
+
+// =======================================
+// DATE FINDER
+// =======================================
+
+function normalizeDate(value) {
+
+    if (!value) return "";
+
+    value = value
+        .replace(/[OQ]/g, "0")
+        .replace(/[IL]/g, "1")
+        .replace(/[SZ]/g, "5")
+        .replace(/[B]/g, "8")
+        .trim();
+
+    let m;
+
+    m = value.match(/^(\d{2})[\/\-.](\d{2})[\/\-.](\d{4})$/);
+
+    if (m) {
+
+        return `${m[3]}-${m[2]}-${m[1]}`;
+
+    }
+
+    m = value.match(/^(\d{2})(\d{2})(\d{4})$/);
+
+    if (m) {
+
+        return `${m[3]}-${m[2]}-${m[1]}`;
+
+    }
+
+    m = value.match(/^(\d{4})[\/\-.](\d{2})[\/\-.](\d{2})$/);
+
+    if (m) {
+
+        return `${m[1]}-${m[2]}-${m[3]}`;
+
+    }
+
+    return "";
+
+}
+
+
+// =======================================
+// DATE OF BIRTH
+// =======================================
+
+function findDOB(text) {
+
+    const patterns = [
+
+        /DATE\s*OF\s*BIRTH\s*[:\-]?\s*([0-9OQILSZB\/\-. ]{8,12})/i,
+
+        /DOB\s*[:\-]?\s*([0-9OQILSZB\/\-. ]{8,12})/i,
+
+        /BIRTH\s*[:\-]?\s*([0-9OQILSZB\/\-. ]{8,12})/i
+
+    ];
+
+    for (const pattern of patterns) {
+
+        const match = text.match(pattern);
+
+        if (match) {
+
+            const date = normalizeDate(match[1]);
+
+            if (date) return date;
+
+        }
+
+    }
+
+    return "";
+
+}
+
+
+// =======================================
+// EXPIRY DATE
+// =======================================
+
+function findExpiry(text) {
+
+    const patterns = [
+
+        /DATE\s*OF\s*EXPIRY\s*[:\-]?\s*([0-9OQILSZB\/\-. ]{8,12})/i,
+
+        /EXPIRY\s*[:\-]?\s*([0-9OQILSZB\/\-. ]{8,12})/i,
+
+        /EXPIRATION\s*[:\-]?\s*([0-9OQILSZB\/\-. ]{8,12})/i
+
+    ];
+
+    for (const pattern of patterns) {
+
+        const match = text.match(pattern);
+
+        if (match) {
+
+            const date = normalizeDate(match[1]);
+
+            if (date) return date;
+
+        }
+
+    }
+
+    return "";
+
+}
+
+
+// =======================================
+// NATIONALITY
+// =======================================
+
+function findNationality(text) {
+
+    const upper = text.toUpperCase();
+
+    if (
+        upper.includes("BANGLADESH") ||
+        upper.includes("BGD")
+    ) {
+
+        return "BGD";
+
+    }
+
+    const match = upper.match(
+        /NATIONALITY\s*[:\-]?\s*([A-Z]{3})/
+    );
+
+    if (match) {
+
+        return match[1];
+
+    }
+
+    return "";
+
+}
+
+
+// =======================================
+// SEX
+// =======================================
+
+function findSex(text) {
+
+    const upper = text.toUpperCase();
+
+    const match = upper.match(
+        /(?:SEX|GENDER)\s*[:\-]?\s*([MF])/ 
+    );
+
+    if (match) {
+
+        return match[1];
+
+    }
+
+    if (
+        /\bFEMALE\b/.test(upper) ||
+        /\bF\b/.test(upper)
+    ) {
+
+        return "F";
+
+    }
+
+    if (
+        /\bMALE\b/.test(upper) ||
+        /\bM\b/.test(upper)
+    ) {
+
+        return "M";
+
+    }
+
+    return "";
+
+}
+
+
+// =======================================
+// NAME
+// =======================================
+
+function findName(text) {
+
+    const lines = text
+        .split("\n")
+        .map(line => line.trim())
+        .filter(line => line.length > 2);
+
+    const labels = [
+
+        "SURNAME",
+
+        "GIVEN NAMES",
+
+        "GIVEN NAME",
+
+        "NAME"
+
+    ];
+
+    for (let i = 0; i < lines.length; i++) {
+
+        const line = lines[i];
+
+        for (const label of labels) {
+
+            if (
+                line.toUpperCase().startsWith(label)
+            ) {
+
+                let value = line
+                    .substring(label.length)
+                    .replace(/^[:\-]/, "")
+                    .trim();
+
+                if (!value && lines[i + 1]) {
+
+                    value = lines[i + 1];
+
+                }
+
+                value = normalize(value);
+
+                if (
+                    value.length >= 3 &&
+                    /[A-Z]/i.test(value)
+                ) {
+
+                    return value.toUpperCase();
+
+                }
+
+            }
+
+        }
+
+    }
+
+
+    // fallback:
+    // look for long alphabetic lines
+
+    for (const line of lines) {
+
+        const cleaned = normalize(line);
+
+        if (
+            cleaned.length >= 8 &&
+            cleaned.length <= 50 &&
+            /^[A-Z .'-]+$/i.test(cleaned) &&
+            !/PASSPORT|BANGLADESH|NATIONALITY|DATE|BIRTH|EXPIRY|SEX|MALE|FEMALE/i.test(cleaned)
+        ) {
+
+            return cleaned.toUpperCase();
+
+        }
+
+    }
+
+    return "";
+
+}
+
+
+// =======================================
+// OCR EXTRACTION
+// =======================================
+
+async function runOCR(buffer) {
+
+    console.log("OCR START");
+
+    const processed = await sharp(buffer)
+        .rotate()
+        .resize({
+            width: 2200,
+            withoutEnlargement: false
+        })
+        .grayscale()
+        .normalize()
+        .sharpen()
+        .png()
+        .toBuffer();
+
+
+    const worker = await createWorker("eng", 1, {
+
+        logger: message => {
+
+            if (message.status) {
+
+                console.log(
+                    "OCR:",
+                    message.status,
+                    message.progress
+                        ? Math.round(message.progress * 100) + "%"
+                        : ""
+                );
+
+            }
+
+        }
+
+    });
+
+
+    await worker.setParameters({
+
+        tessedit_pageseg_mode: "6"
+
+    });
+
+
+    const result = await worker.recognize(processed);
+
+    const text = result.data.text || "";
+
+    await worker.terminate();
+
+    console.log("OCR DONE");
+
+    console.log(text);
+
+    return text;
+
+}
+
+
+// =======================================
+// READ PASSPORT
+// =======================================
 
 app.post(
     "/read-passport",
@@ -199,10 +463,6 @@ app.post(
     async (req, res) => {
 
         try {
-
-            // ===================================
-            // CHECK FILE
-            // ===================================
 
             if (!req.file) {
 
@@ -223,111 +483,55 @@ app.post(
             );
 
 
-            console.log(
-                "File Size:",
-                req.file.size
+            const rawText = await runOCR(
+                req.file.buffer
             );
 
 
-            console.log(
-                "File Type:",
-                req.file.mimetype
-            );
+            const text = cleanText(rawText);
 
 
-            // ===================================
-            // OCR
-            // ===================================
+            const data = {
 
-            console.log(
-                "OCR START"
-            );
+                name: findName(text),
 
+                passportNo:
+                    findPassportNumber(text),
 
-            const result =
-                await Tesseract.recognize(
-                    req.file.buffer,
-                    "eng",
-                    {
+                dob:
+                    findDOB(text),
 
-                        logger: info => {
+                nationality:
+                    findNationality(text),
 
-                            if (
-                                info.status ===
-                                "recognizing text"
-                            ) {
+                sex:
+                    findSex(text),
 
-                                console.log(
-                                    `OCR Progress: ${Math.round(
-                                        info.progress * 100
-                                    )}%`
-                                );
+                expiry:
+                    findExpiry(text)
 
-                            }
-
-                        }
-
-                    }
-                );
+            };
 
 
             console.log(
-                "OCR DONE"
+                "EXTRACTED DATA:",
+                data
             );
 
-
-            const ocrText =
-                result.data.text || "";
-
-
-            console.log(
-                "OCR TEXT:",
-                ocrText
-            );
-
-
-            // ===================================
-            // MRZ EXTRACTION
-            // ===================================
-
-            const passportData =
-                parseMRZ(ocrText);
-
-
-            // ===================================
-            // RESPONSE
-            // ===================================
 
             return res.json({
 
                 success: true,
 
                 message:
-                    passportData.found
-                        ? "Passport MRZ Extracted"
-                        : "OCR Completed - MRZ Not Found",
+                    "Passport OCR completed",
 
-                data: {
+                mode:
+                    "NON-MRZ + MRZ",
 
-                    name:
-                        passportData.name,
+                data: data,
 
-                    passportNo:
-                        passportData.passportNo,
-
-                    dob:
-                        passportData.dob,
-
-                    nationality:
-                        passportData.nationality,
-
-                    sex:
-                        passportData.sex,
-
-                    expiry:
-                        passportData.expiry
-
-                }
+                rawText: rawText
 
             });
 
@@ -346,7 +550,7 @@ app.post(
                 success: false,
 
                 message:
-                    "Passport OCR Failed",
+                    "OCR Failed",
 
                 error:
                     error.message
@@ -359,26 +563,9 @@ app.post(
 );
 
 
-// ===================================
-// 404 HANDLER
-// ===================================
-
-app.use((req, res) => {
-
-    res.status(404).json({
-
-        success: false,
-
-        message: "API Endpoint Not Found"
-
-    });
-
-});
-
-
-// ===================================
-// SERVER
-// ===================================
+// =======================================
+// START SERVER
+// =======================================
 
 const PORT =
     process.env.PORT || 3000;
@@ -386,6 +573,7 @@ const PORT =
 
 app.listen(
     PORT,
+    "0.0.0.0",
     () => {
 
         console.log(
