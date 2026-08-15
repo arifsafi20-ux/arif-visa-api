@@ -1,8 +1,9 @@
 // =======================================
 // ARIF VISA AUTO FILL PRO
-// API SERVER v5.0
+// API SERVER v5.1
 // FULL PASSPORT OCR
 // MRZ + NON-MRZ
+// BANGLADESHI PASSPORT OPTIMIZED
 // =======================================
 
 const express = require("express");
@@ -32,7 +33,7 @@ app.get("/", (req, res) => {
 
     res.json({
         status: "ARIF VISA API RUNNING",
-        version: "5.0.0",
+        version: "5.1.0",
         ocr: "READY",
         mode: "FULL PASSPORT OCR - MRZ + NON-MRZ"
     });
@@ -41,12 +42,12 @@ app.get("/", (req, res) => {
 
 
 // =======================================
-// CLEAN OCR TEXT
+// CLEAN TEXT
 // =======================================
 
 function cleanText(text) {
 
-    return (text || "")
+    return String(text || "")
         .replace(/\r/g, "\n")
         .replace(/[“”]/g, '"')
         .replace(/[‘’]/g, "'")
@@ -60,15 +61,26 @@ function cleanText(text) {
 
 
 // =======================================
+// LINES
+// =======================================
+
+function getLines(text) {
+
+    return cleanText(text)
+        .split("\n")
+        .map(x => x.trim())
+        .filter(Boolean);
+
+}
+
+
+// =======================================
 // NORMALIZE
 // =======================================
 
 function normalize(value) {
 
-    if (!value) return "";
-
-    return String(value)
-        .replace(/[|]/g, "I")
+    return String(value || "")
         .replace(/\s+/g, " ")
         .trim();
 
@@ -76,83 +88,109 @@ function normalize(value) {
 
 
 // =======================================
-// SAFE UPPER
+// NAME CLEAN
 // =======================================
 
-function upper(value) {
+function cleanName(value) {
 
-    return normalize(value).toUpperCase();
+    return normalize(value)
+        .replace(/[^A-Z .'-]/gi, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toUpperCase();
 
 }
 
 
 // =======================================
-// GET LINES
+// DATE
 // =======================================
 
-function getLines(text) {
+function normalizeDate(value) {
 
-    return cleanText(text)
-        .split("\n")
-        .map(line => line.trim())
-        .filter(Boolean);
+    if (!value) return "";
 
-}
-
-
-// =======================================
-// GET VALUE AFTER LABEL
-// =======================================
-
-function findAfterLabel(text, labels) {
-
-    const lines = getLines(text);
-
-    for (let i = 0; i < lines.length; i++) {
-
-        const originalLine = lines[i];
-
-        const line = originalLine
+    let v =
+        String(value)
+            .toUpperCase()
+            .replace(/O/g, "0")
+            .replace(/[IL]/g, "1")
             .replace(/\s+/g, " ")
             .trim();
 
-        for (const label of labels) {
 
-            const escaped =
-                label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // DD MON YYYY
 
-            const regex = new RegExp(
-                "^" +
-                escaped +
-                "\\s*(?::|\\-|=)?\\s*(.*)$",
-                "i"
-            );
+    const monthMap = {
 
-            const match = line.match(regex);
+        JAN: "01",
+        FEB: "02",
+        MAR: "03",
+        APR: "04",
+        MAY: "05",
+        JUN: "06",
+        JUL: "07",
+        AUG: "08",
+        SEP: "09",
+        OCT: "10",
+        NOV: "11",
+        DEC: "12"
 
-            if (match) {
+    };
 
-                let value =
-                    (match[1] || "").trim();
 
-                if (!value && lines[i + 1]) {
+    let m =
+        v.match(
+            /\b(\d{1,2})\s*([A-Z]{3})\s*(\d{4})\b/
+        );
 
-                    value =
-                        lines[i + 1].trim();
 
-                }
+    if (m) {
 
-                if (value) {
+        const day =
+            m[1].padStart(2, "0");
 
-                    return normalize(value);
+        const month =
+            monthMap[m[2]];
 
-                }
+        if (month) {
 
-            }
+            return `${m[3]}-${month}-${day}`;
 
         }
 
     }
+
+
+    // DD/MM/YYYY
+
+    m =
+        v.match(
+            /\b(\d{2})[\/.\-](\d{2})[\/.\-](\d{4})\b/
+        );
+
+
+    if (m) {
+
+        return `${m[3]}-${m[2]}-${m[1]}`;
+
+    }
+
+
+    // YYYY-MM-DD
+
+    m =
+        v.match(
+            /\b(\d{4})[\/.\-](\d{2})[\/.\-](\d{2})\b/
+        );
+
+
+    if (m) {
+
+        return `${m[1]}-${m[2]}-${m[3]}`;
+
+    }
+
 
     return "";
 
@@ -160,63 +198,52 @@ function findAfterLabel(text, labels) {
 
 
 // =======================================
-// FIND FIELD BY FLEXIBLE LABEL
+// FIND LABEL VALUE
 // =======================================
 
-function findFlexibleLabel(text, labels) {
+function findLabelValue(text, labels) {
 
-    const lines = getLines(text);
+    const lines =
+        getLines(text);
+
 
     for (let i = 0; i < lines.length; i++) {
 
         const line =
-            lines[i]
-                .replace(/[^A-Z0-9' ]/gi, " ")
-                .replace(/\s+/g, " ")
-                .trim()
-                .toUpperCase();
+            lines[i];
+
 
         for (const label of labels) {
 
-            const cleanLabel =
-                label
-                    .replace(/[^A-Z0-9]/gi, "")
-                    .toUpperCase();
+            const regex =
+                new RegExp(
+                    label +
+                    "\\s*[:.\\-]?\\s*(.*)$",
+                    "i"
+                );
 
-            const cleanLine =
-                line
-                    .replace(/[^A-Z0-9]/g, "");
 
-            if (
-                cleanLine === cleanLabel ||
-                cleanLine.startsWith(cleanLabel)
-            ) {
+            const match =
+                line.match(regex);
+
+
+            if (match) {
 
                 let value =
-                    lines[i]
-                        .replace(
-                            new RegExp(
-                                label,
-                                "i"
-                            ),
-                            ""
-                        )
-                        .replace(
-                            /^[:\-\s]+/,
-                            ""
-                        )
-                        .trim();
+                    normalize(match[1]);
+
 
                 if (!value && lines[i + 1]) {
 
                     value =
-                        lines[i + 1].trim();
+                        normalize(lines[i + 1]);
 
                 }
 
+
                 if (value) {
 
-                    return normalize(value);
+                    return value;
 
                 }
 
@@ -225,6 +252,7 @@ function findFlexibleLabel(text, labels) {
         }
 
     }
+
 
     return "";
 
@@ -239,215 +267,35 @@ function findPassportNumber(text) {
 
     const patterns = [
 
-        /PASSPORT\s*(?:NO|NUMBER)?\s*[:\-]?\s*([A-Z][A-Z0-9]{6,9})/i,
+        /Passport\s*Number\s*([A-Z]\d{7,8})/i,
 
-        /PASSPORT\s*#\s*([A-Z][A-Z0-9]{6,9})/i,
+        /Passport\s*No\.?\s*([A-Z]\d{7,8})/i,
 
-        /DOCUMENT\s*(?:NO|NUMBER)?\s*[:\-]?\s*([A-Z][A-Z0-9]{6,9})/i,
+        /Passport\s*Number\s*[:\-]?\s*([A-Z0-9]{8,9})/i,
 
-        /\b([A-Z][0-9]{7,8})\b/i
+        /\b([A-Z]\d{7,8})\b/
 
     ];
 
+
     for (const pattern of patterns) {
 
-        const match =
+        const m =
             text.match(pattern);
 
-        if (
-            match &&
-            match[1]
-        ) {
 
-            return match[1]
-                .replace(/[\s<]/g, "")
+        if (m && m[1]) {
+
+            return m[1]
+                .replace(/\s/g, "")
                 .toUpperCase();
 
         }
 
     }
 
-    return "";
-
-}
-
-
-// =======================================
-// DATE NORMALIZER
-// =======================================
-
-function normalizeDate(value) {
-
-    if (!value) return "";
-
-    value = String(value)
-        .toUpperCase()
-        .replace(/[OQ]/g, "0")
-        .replace(/[IL]/g, "1")
-        .replace(/[SZ]/g, "5")
-        .replace(/[B]/g, "8")
-        .replace(/\s/g, "")
-        .trim();
-
-    let m;
-
-    m = value.match(
-        /^(\d{2})[\/.\-](\d{2})[\/.\-](\d{4})$/
-    );
-
-    if (m) {
-
-        return `${m[3]}-${m[2]}-${m[1]}`;
-
-    }
-
-    m = value.match(
-        /^(\d{4})[\/.\-](\d{2})[\/.\-](\d{2})$/
-    );
-
-    if (m) {
-
-        return `${m[1]}-${m[2]}-${m[3]}`;
-
-    }
-
-    m = value.match(
-        /^(\d{2})(\d{2})(\d{4})$/
-    );
-
-    if (m) {
-
-        return `${m[3]}-${m[2]}-${m[1]}`;
-
-    }
 
     return "";
-
-}
-
-
-// =======================================
-// MRZ DATE
-// YYMMDD -> YYYY-MM-DD
-// =======================================
-
-function mrzDate(value, type = "dob") {
-
-    if (!value) return "";
-
-    value =
-        value
-            .replace(/[^0-9]/g, "")
-            .trim();
-
-    if (!/^\d{6}$/.test(value)) {
-
-        return "";
-
-    }
-
-    const yy =
-        parseInt(value.substring(0, 2), 10);
-
-    const mm =
-        value.substring(2, 4);
-
-    const dd =
-        value.substring(4, 6);
-
-    if (
-        Number(mm) < 1 ||
-        Number(mm) > 12 ||
-        Number(dd) < 1 ||
-        Number(dd) > 31
-    ) {
-
-        return "";
-
-    }
-
-    let year;
-
-    if (type === "dob") {
-
-        year =
-            yy >= 30
-                ? 1900 + yy
-                : 2000 + yy;
-
-    }
-    else {
-
-        year =
-            yy >= 70
-                ? 1900 + yy
-                : 2000 + yy;
-
-    }
-
-    return `${year}-${mm}-${dd}`;
-
-}
-
-
-// =======================================
-// DOB
-// =======================================
-
-function findDOB(text) {
-
-    const value =
-        findAfterLabel(text, [
-            "DATE OF BIRTH",
-            "DATEOF BIRTH",
-            "DATE OF BIRTH.",
-            "DOB",
-            "BIRTH DATE",
-            "BIRTHDATE"
-        ]);
-
-    return normalizeDate(value);
-
-}
-
-
-// =======================================
-// ISSUE DATE
-// =======================================
-
-function findIssueDate(text) {
-
-    const value =
-        findAfterLabel(text, [
-            "DATE OF ISSUE",
-            "DATEOF ISSUE",
-            "ISSUE DATE",
-            "DATE ISSUED",
-            "ISSUED"
-        ]);
-
-    return normalizeDate(value);
-
-}
-
-
-// =======================================
-// EXPIRY DATE
-// =======================================
-
-function findExpiry(text) {
-
-    const value =
-        findAfterLabel(text, [
-            "DATE OF EXPIRY",
-            "DATEOF EXPIRY",
-            "EXPIRY DATE",
-            "EXPIRATION DATE",
-            "EXPIRY",
-            "DATE OF EXPIRATION"
-        ]);
-
-    return normalizeDate(value);
 
 }
 
@@ -459,46 +307,433 @@ function findExpiry(text) {
 function findNationality(text) {
 
     const value =
-        findAfterLabel(text, [
-            "NATIONALITY"
-        ]);
+        findLabelValue(
+            text,
+            ["Nationality"]
+        );
 
-    if (value) {
 
-        const v =
-            upper(value);
+    const v =
+        value.toUpperCase();
 
-        if (
-            v.includes("BANGLADESH") ||
-            /\bBGD\b/.test(v)
-        ) {
-
-            return "BGD";
-
-        }
-
-        const match =
-            v.match(/\b[A-Z]{3}\b/);
-
-        if (match) {
-
-            return match[0];
-
-        }
-
-    }
-
-    const all =
-        upper(text);
 
     if (
-        all.includes("BANGLADESH") ||
-        /\bBGD\b/.test(all)
+        v.includes("BANGLADESH") ||
+        v.includes("BANGLADESHI")
     ) {
 
         return "BGD";
 
     }
+
+
+    if (/\bBGD\b/i.test(text)) {
+
+        return "BGD";
+
+    }
+
+
+    return "";
+
+}
+
+
+// =======================================
+// NAME
+// =======================================
+
+function findNames(text) {
+
+    const result = {
+
+        fullName: "",
+        surname: "",
+        givenName: ""
+
+    };
+
+
+    const lines =
+        getLines(text);
+
+
+    // ===================================
+    // Surname
+    // ===================================
+
+    for (let i = 0; i < lines.length; i++) {
+
+        if (/Surname/i.test(lines[i])) {
+
+            let value =
+                lines[i]
+                    .replace(/.*Surname/i, "")
+                    .replace(/[:\-]/g, "")
+                    .trim();
+
+
+            if (
+                !value &&
+                lines[i + 1]
+            ) {
+
+                value =
+                    lines[i + 1];
+
+            }
+
+
+            if (value) {
+
+                result.surname =
+                    cleanName(value);
+
+                break;
+
+            }
+
+        }
+
+    }
+
+
+    // ===================================
+    // Given Name
+    // ===================================
+
+    for (let i = 0; i < lines.length; i++) {
+
+        if (/Given\s*Name/i.test(lines[i])) {
+
+            let value =
+                lines[i]
+                    .replace(
+                        /.*Given\s*Name/i,
+                        ""
+                    )
+                    .replace(/[:\-]/g, "")
+                    .trim();
+
+
+            if (
+                !value &&
+                lines[i + 1]
+            ) {
+
+                value =
+                    lines[i + 1];
+
+            }
+
+
+            if (value) {
+
+                result.givenName =
+                    cleanName(value);
+
+                break;
+
+            }
+
+        }
+
+    }
+
+
+    // ===================================
+    // OCR-specific fallback
+    // ===================================
+
+    if (!result.surname) {
+
+        const m =
+            text.match(
+                /Surname[\s\S]{0,100}?([A-Z]{3,})/i
+            );
+
+
+        if (m) {
+
+            result.surname =
+                cleanName(m[1]);
+
+        }
+
+    }
+
+
+    if (!result.givenName) {
+
+        const m =
+            text.match(
+                /Given\s*Name[\s\S]{0,100}?((?:MD|MOHAMMAD|ABDUL|MD\.)[\sA-Z]{2,})/i
+            );
+
+
+        if (m) {
+
+            result.givenName =
+                cleanName(m[1]);
+
+        }
+
+    }
+
+
+    if (
+        result.surname &&
+        result.givenName
+    ) {
+
+        result.fullName =
+            `${result.givenName} ${result.surname}`;
+
+    }
+
+
+    return result;
+
+}
+
+
+// =======================================
+// FATHER
+// =======================================
+
+function findFather(text) {
+
+    return cleanName(
+        findLabelValue(
+            text,
+            [
+                "Father's Name",
+                "Father's Mame",
+                "Father Name",
+                "Father"
+            ]
+        )
+    );
+
+}
+
+
+// =======================================
+// MOTHER
+// =======================================
+
+function findMother(text) {
+
+    return cleanName(
+        findLabelValue(
+            text,
+            [
+                "Mother's Name",
+                "Mother's Mame",
+                "Mother Name",
+                "Mother"
+            ]
+        )
+    );
+
+}
+
+
+// =======================================
+// SPOUSE
+// =======================================
+
+function findSpouse(text) {
+
+    return cleanName(
+        findLabelValue(
+            text,
+            [
+                "Spouse's Name",
+                "Spouse's Mame",
+                "Spouse Name",
+                "Spouse"
+            ]
+        )
+    );
+
+}
+
+
+// =======================================
+// ADDRESS
+// =======================================
+
+function findAddress(text) {
+
+    return normalize(
+        findLabelValue(
+            text,
+            [
+                "Permanent Address",
+                "Present Address",
+                "Current Address",
+                "Residential Address"
+            ]
+        )
+    );
+
+}
+
+
+// =======================================
+// PERSONAL NUMBER
+// =======================================
+
+function findPersonalNo(text) {
+
+    const lines =
+        getLines(text);
+
+
+    for (let i = 0; i < lines.length; i++) {
+
+        if (/Personal\s*No/i.test(lines[i])) {
+
+            const after =
+                lines[i]
+                    .replace(
+                        /.*Personal\s*No/i,
+                        ""
+                    )
+                    .replace(/[:\-]/g, "")
+                    .trim();
+
+
+            const m =
+                after.match(
+                    /\d{8,17}/
+                );
+
+
+            if (m) {
+
+                return m[0];
+
+            }
+
+
+            if (lines[i + 1]) {
+
+                const n =
+                    lines[i + 1]
+                        .match(
+                            /\d{8,17}/
+                        );
+
+
+                if (n) {
+
+                    return n[0];
+
+                }
+
+            }
+
+        }
+
+    }
+
+
+    // General fallback
+
+    const m =
+        text.match(
+            /Personal\s*No[\s\S]{0,100}?(\d{8,17})/i
+        );
+
+
+    return m ? m[1] : "";
+
+}
+
+
+// =======================================
+// DOB
+// =======================================
+
+function findDOB(text) {
+
+    const m =
+        text.match(
+            /Date\s*of\s*Birth[\s\S]{0,80}?(\d{1,2}\s*[A-Z]{3}\s*\d{4})/i
+        );
+
+
+    if (m) {
+
+        return normalizeDate(m[1]);
+
+    }
+
+
+    return "";
+
+}
+
+
+// =======================================
+// ISSUE DATE
+// =======================================
+
+function findIssueDate(text) {
+
+    const m =
+        text.match(
+            /Date\s*of\s*Issue[\s\S]{0,100}?(\d{1,2}\s*[A-Z]{3}\s*\d{4})/i
+        );
+
+
+    if (m) {
+
+        return normalizeDate(m[1]);
+
+    }
+
+
+    return "";
+
+}
+
+
+// =======================================
+// EXPIRY DATE
+// =======================================
+
+function findExpiryDate(text) {
+
+    const m =
+        text.match(
+            /Date\s*of\s*Expiry[\s\S]{0,100}?(\d{1,2}\s*[A-Z]{3}\s*\d{4})/i
+        );
+
+
+    if (m) {
+
+        return normalizeDate(m[1]);
+
+    }
+
+
+    // OCR sometimes loses "Date of"
+
+    const m2 =
+        text.match(
+            /Expiry[\s\S]{0,100}?(\d{1,2}\s*[A-Z]{3}\s*\d{4})/i
+        );
+
+
+    if (m2) {
+
+        return normalizeDate(m2[1]);
+
+    }
+
 
     return "";
 
@@ -511,120 +746,20 @@ function findNationality(text) {
 
 function findSex(text) {
 
-    const value =
-        findAfterLabel(text, [
-            "SEX",
-            "GENDER"
-        ]);
+    const m =
+        text.match(
+            /Sex[\s:.\-]*([MF])/i
+        );
 
-    if (!value) {
 
-        return "";
+    if (m) {
 
-    }
-
-    const v =
-        upper(value);
-
-    if (
-        /^M\b/.test(v) ||
-        /^MALE\b/.test(v)
-    ) {
-
-        return "M";
+        return m[1].toUpperCase();
 
     }
 
-    if (
-        /^F\b/.test(v) ||
-        /^FEMALE\b/.test(v)
-    ) {
-
-        return "F";
-
-    }
 
     return "";
-
-}
-
-
-// =======================================
-// CLEAN PERSON NAME
-// =======================================
-
-function cleanPersonName(value) {
-
-    return String(value || "")
-        .replace(/[^A-Z .'-]/gi, " ")
-        .replace(/\s+/g, " ")
-        .trim()
-        .toUpperCase();
-
-}
-
-
-// =======================================
-// FULL NAME
-// =======================================
-
-function findName(text) {
-
-    let value =
-        findAfterLabel(text, [
-            "FULL NAME",
-            "NAME"
-        ]);
-
-    if (!value) {
-
-        value =
-            findAfterLabel(text, [
-                "GIVEN NAMES",
-                "GIVEN NAME"
-            ]);
-
-    }
-
-    return cleanPersonName(value);
-
-}
-
-
-// =======================================
-// SURNAME
-// =======================================
-
-function findSurname(text) {
-
-    const value =
-        findAfterLabel(text, [
-            "SURNAME",
-            "SUR NAME",
-            "LAST NAME",
-            "FAMILY NAME"
-        ]);
-
-    return cleanPersonName(value);
-
-}
-
-
-// =======================================
-// GIVEN NAME
-// =======================================
-
-function findGivenName(text) {
-
-    const value =
-        findAfterLabel(text, [
-            "GIVEN NAMES",
-            "GIVEN NAME",
-            "FIRST NAME",
-            "FORENAME"
-        ]);
-
-    return cleanPersonName(value);
 
 }
 
@@ -635,59 +770,44 @@ function findGivenName(text) {
 
 function findPlaceOfBirth(text) {
 
-    return findFlexibleLabel(text, [
-        "PLACE OF BIRTH",
-        "PLACEOF BIRTH",
-        "BIRTH PLACE"
-    ]);
+    const m =
+        text.match(
+            /Place\s*of\s*Birth[\s:.\-]*([A-Z][A-Z ]{2,})/i
+        );
+
+
+    if (m) {
+
+        return cleanName(m[1]);
+
+    }
+
+
+    return "";
 
 }
 
 
 // =======================================
-// PLACE OF ISSUE
-// =======================================
-
-function findPlaceOfIssue(text) {
-
-    return findFlexibleLabel(text, [
-        "PLACE OF ISSUE",
-        "PLACEOF ISSUE",
-        "ISSUING PLACE"
-    ]);
-
-}
-
-
-// =======================================
-// ISSUING AUTHORITY
+// ISSUE AUTHORITY
 // =======================================
 
 function findAuthority(text) {
 
-    return findFlexibleLabel(text, [
-        "ISSUING AUTHORITY",
-        "AUTHORITY",
-        "ISSUED BY"
-    ]);
-
-}
+    const m =
+        text.match(
+            /Issuing\s*Authority[\s:.\-]*([A-Z][A-Z ]{2,})/i
+        );
 
 
-// =======================================
-// PERSONAL NUMBER
-// =======================================
+    if (m) {
 
-function findPersonalNumber(text) {
+        return cleanName(m[1]);
 
-    return findFlexibleLabel(text, [
-        "PERSONAL NO",
-        "PERSONAL NUMBER",
-        "PERSONAL ID",
-        "NATIONAL ID",
-        "NATIONAL ID NO",
-        "IDENTIFICATION NO"
-    ]);
+    }
+
+
+    return "";
 
 }
 
@@ -698,77 +818,15 @@ function findPersonalNumber(text) {
 
 function findPreviousPassport(text) {
 
-    return findFlexibleLabel(text, [
-        "PREVIOUS PASSPORT",
-        "PREVIOUS PASSPORT NO",
-        "PREVIOUS PASSPORT NUMBER",
-        "OLD PASSPORT",
-        "OLD PASSPORT NO"
-    ]);
-
-}
+    const m =
+        text.match(
+            /Previous\s*Passport\s*No[\s:.\-]*([A-Z0-9]+)/i
+        );
 
 
-// =======================================
-// ADDRESS
-// =======================================
-
-function findAddress(text) {
-
-    return findFlexibleLabel(text, [
-        "PRESENT ADDRESS",
-        "PERMANENT ADDRESS",
-        "CURRENT ADDRESS",
-        "RESIDENTIAL ADDRESS",
-        "ADDRESS"
-    ]);
-
-}
-
-
-// =======================================
-// FATHER NAME
-// =======================================
-
-function findFather(text) {
-
-    return findFlexibleLabel(text, [
-        "FATHER'S NAME",
-        "FATHER NAME",
-        "FATHER"
-    ]);
-
-}
-
-
-// =======================================
-// MOTHER NAME
-// =======================================
-
-function findMother(text) {
-
-    return findFlexibleLabel(text, [
-        "MOTHER'S NAME",
-        "MOTHER NAME",
-        "MOTHER"
-    ]);
-
-}
-
-
-// =======================================
-// SPOUSE NAME
-// =======================================
-
-function findSpouse(text) {
-
-    return findFlexibleLabel(text, [
-        "SPOUSE NAME",
-        "SPOUSE'S NAME",
-        "SPOUSE",
-        "HUSBAND NAME",
-        "WIFE NAME"
-    ]);
+    return m
+        ? m[1].toUpperCase()
+        : "";
 
 }
 
@@ -779,344 +837,15 @@ function findSpouse(text) {
 
 function findProfession(text) {
 
-    return findFlexibleLabel(text, [
-        "PROFESSION",
-        "OCCUPATION",
-        "JOB"
-    ]);
-
-}
-
-
-// =======================================
-// FIND MRZ LINES
-// =======================================
-
-function findMRZ(text) {
-
-    const lines =
-        getLines(text)
-            .map(line =>
-                line
-                    .replace(/\s/g, "")
-                    .toUpperCase()
-            );
-
-    const candidates =
-        lines.filter(line => {
-
-            if (line.length < 25) {
-
-                return false;
-
-            }
-
-            const allowed =
-                line.replace(
-                    /[A-Z0-9<]/g,
-                    ""
-                );
-
-            return allowed.length <= 3;
-
-        });
-
-    return candidates.slice(-2);
-
-}
-
-
-// =======================================
-// NORMALIZE MRZ LINE
-// =======================================
-
-function normalizeMRZLine(line) {
-
-    return String(line || "")
-        .toUpperCase()
-        .replace(/\s/g, "")
-        .replace(/[^A-Z0-9<]/g, "");
-
-}
-
-
-// =======================================
-// REPAIR MRZ
-// =======================================
-
-function repairMRZ(line) {
-
-    let value =
-        normalizeMRZLine(line);
-
-    /*
-     * MRZ normally uses < as filler.
-     * OCR often reads:
-     * < as K / C / /
-     * 0 as O
-     * 1 as I
-     */
-
-    value =
-        value
-            .replace(/«/g, "<")
-            .replace(/</g, "<");
-
-    return value;
-
-}
-
-
-// =======================================
-// PARSE MRZ
-// =======================================
-
-function parseMRZ(mrzLines) {
-
-    const result = {
-
-        passportNo: "",
-        nationality: "",
-        dob: "",
-        sex: "",
-        expiryDate: "",
-        surname: "",
-        givenName: "",
-        fullName: ""
-
-    };
-
-    if (
-        !mrzLines ||
-        mrzLines.length < 2
-    ) {
-
-        return result;
-
-    }
-
-    let line1 =
-        repairMRZ(mrzLines[0]);
-
-    let line2 =
-        repairMRZ(mrzLines[1]);
-
-
-    // ===================================
-    // FIND THE LINE THAT STARTS WITH P<
-    // ===================================
-
-    if (!line1.startsWith("P<")) {
-
-        if (line2.startsWith("P<")) {
-
-            const temp = line1;
-
-            line1 = line2;
-            line2 = temp;
-
-        }
-
-    }
-
-
-    if (!line1.startsWith("P<")) {
-
-        return result;
-
-    }
-
-
-    // ===================================
-    // MRZ LINE 1
-    //
-    // P<BGDSURNAME<<GIVEN<NAMES<<<<<<
-    // ===================================
-
-    const namePart =
-        line1.substring(5);
-
-    const namePieces =
-        namePart.split("<<");
-
-    if (namePieces.length >= 1) {
-
-        result.surname =
-            namePieces[0]
-                .replace(/</g, " ")
-                .replace(/\s+/g, " ")
-                .trim();
-
-    }
-
-    if (namePieces.length >= 2) {
-
-        result.givenName =
-            namePieces[1]
-                .replace(/</g, " ")
-                .replace(/\s+/g, " ")
-                .trim();
-
-    }
-
-
-    if (
-        result.surname ||
-        result.givenName
-    ) {
-
-        result.fullName =
-            `${result.givenName} ${result.surname}`
-                .trim();
-
-    }
-
-
-    // ===================================
-    // MRZ LINE 2
-    //
-    // PASSPORT NUMBER
-    // NATIONALITY
-    // DOB
-    // SEX
-    // EXPIRY
-    // ===================================
-
-    if (line2.length >= 28) {
-
-        let passportNo =
-            line2.substring(0, 9)
-                .replace(/</g, "")
-                .trim();
-
-        let nationality =
-            line2.substring(10, 13);
-
-        let dob =
-            line2.substring(13, 19);
-
-        let sex =
-            line2.substring(20, 21);
-
-        let expiry =
-            line2.substring(21, 27);
-
-
-        // =================================
-        // PASSPORT NUMBER CLEAN
-        // =================================
-
-        passportNo =
-            passportNo
-                .replace(/O/g, "0")
-                .replace(/I/g, "1")
-                .replace(/S/g, "5")
-                .replace(/B/g, "8");
-
-
-        if (
-            /^[A-Z0-9]{6,9}$/.test(
-                passportNo
-            )
-        ) {
-
-            result.passportNo =
-                passportNo;
-
-        }
-
-
-        // =================================
-        // NATIONALITY
-        // =================================
-
-        if (
-            /^[A-Z]{3}$/.test(
-                nationality
-            )
-        ) {
-
-            result.nationality =
-                nationality;
-
-        }
-
-
-        // =================================
-        // DOB
-        // =================================
-
-        const parsedDOB =
-            mrzDate(
-                dob,
-                "dob"
-            );
-
-        if (parsedDOB) {
-
-            result.dob =
-                parsedDOB;
-
-        }
-
-
-        // =================================
-        // SEX
-        // =================================
-
-        if (
-            sex === "M" ||
-            sex === "F"
-        ) {
-
-            result.sex =
-                sex;
-
-        }
-
-
-        // =================================
-        // EXPIRY
-        // =================================
-
-        const parsedExpiry =
-            mrzDate(
-                expiry,
-                "expiry"
-            );
-
-        if (parsedExpiry) {
-
-            result.expiryDate =
-                parsedExpiry;
-
-        }
-
-    }
-
-
-    return result;
-
-}
-
-
-// =======================================
-// OCR IMAGE PREPARATION
-// =======================================
-
-async function prepareImage(buffer) {
-
-    return sharp(buffer)
-        .rotate()
-        .resize({
-            width: 2400,
-            withoutEnlargement: false
-        })
-        .grayscale()
-        .normalize()
-        .sharpen()
-        .png()
-        .toBuffer();
+    return normalize(
+        findLabelValue(
+            text,
+            [
+                "Profession",
+                "Occupation"
+            ]
+        )
+    );
 
 }
 
@@ -1130,10 +859,22 @@ async function runOCR(buffer) {
     console.log("OCR START");
 
     const processed =
-        await prepareImage(buffer);
+        await sharp(buffer)
+            .rotate()
+            .resize({
+                width: 3000,
+                withoutEnlargement: false
+            })
+            .grayscale()
+            .normalize()
+            .sharpen()
+            .png()
+            .toBuffer();
+
 
     const worker =
         await createWorker("eng");
+
 
     try {
 
@@ -1156,13 +897,18 @@ async function runOCR(buffer) {
             result.data.text || "";
 
 
-        console.log("OCR DONE");
+        console.log(
+            "OCR DONE"
+        );
+
 
         console.log(
             "========== RAW OCR =========="
         );
 
+
         console.log(text);
+
 
         console.log(
             "=============================="
@@ -1172,39 +918,12 @@ async function runOCR(buffer) {
         return text;
 
     }
+
     finally {
 
         await worker.terminate();
 
     }
-
-}
-
-
-// =======================================
-// MERGE DATA
-// =======================================
-
-function mergeData(primary, secondary) {
-
-    const result = {};
-
-    const keys =
-        new Set([
-            ...Object.keys(primary || {}),
-            ...Object.keys(secondary || {})
-        ]);
-
-    for (const key of keys) {
-
-        result[key] =
-            primary[key] ||
-            secondary[key] ||
-            "";
-
-    }
-
-    return result;
 
 }
 
@@ -1235,27 +954,10 @@ app.post(
 
 
             console.log(
-                "================================="
-            );
-
-            console.log(
-                "PASSPORT RECEIVED:",
+                "Passport Received:",
                 req.file.originalname
             );
 
-            console.log(
-                "FILE SIZE:",
-                req.file.size
-            );
-
-            console.log(
-                "================================="
-            );
-
-
-            // =================================
-            // OCR
-            // =================================
 
             const rawText =
                 await runOCR(
@@ -1268,47 +970,23 @@ app.post(
 
 
             // =================================
-            // FIND MRZ
+            // EXTRACT
             // =================================
 
-            const mrz =
-                findMRZ(text);
+            const names =
+                findNames(text);
 
 
-            console.log(
-                "MRZ LINES:",
-                mrz
-            );
-
-
-            // =================================
-            // PARSE MRZ
-            // =================================
-
-            const mrzData =
-                parseMRZ(mrz);
-
-
-            console.log(
-                "MRZ DATA:",
-                mrzData
-            );
-
-
-            // =================================
-            // NON MRZ DATA
-            // =================================
-
-            const normalData = {
+            const data = {
 
                 fullName:
-                    findName(text),
+                    names.fullName,
 
                 surname:
-                    findSurname(text),
+                    names.surname,
 
                 givenName:
-                    findGivenName(text),
+                    names.givenName,
 
                 passportNo:
                     findPassportNumber(text),
@@ -1329,16 +1007,16 @@ app.post(
                     findIssueDate(text),
 
                 expiryDate:
-                    findExpiry(text),
+                    findExpiryDate(text),
 
                 placeOfIssue:
-                    findPlaceOfIssue(text),
+                    "",
 
                 issuingAuthority:
                     findAuthority(text),
 
                 personalNo:
-                    findPersonalNumber(text),
+                    findPersonalNo(text),
 
                 previousPassportNo:
                     findPreviousPassport(text),
@@ -1356,86 +1034,154 @@ app.post(
                     findSpouse(text),
 
                 profession:
-                    findProfession(text)
-
-            };
-
-
-            // =================================
-            // MRZ HAS PRIORITY FOR CORE FIELDS
-            // =================================
-
-            const data = {
-
-                fullName:
-                    mrzData.fullName ||
-                    normalData.fullName,
-
-                surname:
-                    mrzData.surname ||
-                    normalData.surname,
-
-                givenName:
-                    mrzData.givenName ||
-                    normalData.givenName,
-
-                passportNo:
-                    mrzData.passportNo ||
-                    normalData.passportNo,
-
-                nationality:
-                    mrzData.nationality ||
-                    normalData.nationality,
-
-                dob:
-                    mrzData.dob ||
-                    normalData.dob,
-
-                sex:
-                    mrzData.sex ||
-                    normalData.sex,
-
-                placeOfBirth:
-                    normalData.placeOfBirth,
-
-                issueDate:
-                    normalData.issueDate,
-
-                expiryDate:
-                    mrzData.expiryDate ||
-                    normalData.expiryDate,
-
-                placeOfIssue:
-                    normalData.placeOfIssue,
-
-                issuingAuthority:
-                    normalData.issuingAuthority,
-
-                personalNo:
-                    normalData.personalNo,
-
-                previousPassportNo:
-                    normalData.previousPassportNo,
-
-                address:
-                    normalData.address,
-
-                fatherName:
-                    normalData.fatherName,
-
-                motherName:
-                    normalData.motherName,
-
-                spouseName:
-                    normalData.spouseName,
-
-                profession:
-                    normalData.profession,
+                    findProfession(text),
 
                 mrz:
-                    mrz
+                    []
 
             };
+
+
+            // =================================
+            // MRZ
+            // =================================
+
+            const mrzLines =
+                getLines(text)
+                    .map(x =>
+                        x
+                            .replace(/\s/g, "")
+                            .toUpperCase()
+                    )
+                    .filter(
+                        x =>
+                            x.length >= 30 &&
+                            /^[A-Z0-9<]+$/.test(x)
+                    );
+
+
+            data.mrz =
+                mrzLines.slice(-2);
+
+
+            // =================================
+            // MRZ PASSPORT FALLBACK
+            // =================================
+
+            if (!data.passportNo) {
+
+                const line =
+                    data.mrz.find(
+                        x =>
+                            x.startsWith("P<") === false
+                    );
+
+
+                if (line) {
+
+                    const candidate =
+                        line
+                            .substring(0, 9)
+                            .replace(/</g, "")
+                            .toUpperCase();
+
+
+                    if (
+                        /^[A-Z]\d{7,8}$/.test(
+                            candidate
+                        )
+                    ) {
+
+                        data.passportNo =
+                            candidate;
+
+                    }
+
+                }
+
+            }
+
+
+            // =================================
+            // NAME FALLBACK FROM MRZ
+            // =================================
+
+            const mrzName =
+                data.mrz.find(
+                    x =>
+                        x.startsWith("P<")
+                );
+
+
+            if (
+                mrzName &&
+                (
+                    !data.surname ||
+                    !data.givenName
+                )
+            ) {
+
+                const namePart =
+                    mrzName
+                        .substring(5)
+                        .split("<<");
+
+
+                const surname =
+                    cleanName(
+                        (namePart[0] || "")
+                            .replace(/</g, " ")
+                    );
+
+
+                const given =
+                    cleanName(
+                        (namePart[1] || "")
+                            .replace(/</g, " ")
+                    );
+
+
+                // Reject OCR filler
+
+                if (
+                    surname &&
+                    !/L{5,}/.test(surname)
+                ) {
+
+                    data.surname =
+                        data.surname ||
+                        surname;
+
+                }
+
+
+                if (
+                    given &&
+                    !/L{5,}/.test(given)
+                ) {
+
+                    data.givenName =
+                        data.givenName ||
+                        given;
+
+                }
+
+
+                if (
+                    !data.fullName &&
+                    (
+                        data.surname ||
+                        data.givenName
+                    )
+                ) {
+
+                    data.fullName =
+                        `${data.givenName || ""} ${data.surname || ""}`
+                            .trim();
+
+                }
+
+            }
 
 
             // =================================
@@ -1458,19 +1204,20 @@ app.post(
 
 
             // =================================
-            // BANGLADESH FALLBACK
+            // FINAL NATIONALITY
             // =================================
 
-            if (
-                !data.nationality &&
-                (
-                    /BANGLADESH/i.test(text) ||
-                    mrzData.nationality === "BGD"
-                )
-            ) {
+            if (!data.nationality) {
 
-                data.nationality =
-                    "BGD";
+                if (
+                    /BANGLADESH/i.test(text) ||
+                    /BANGLADESHI/i.test(text)
+                ) {
+
+                    data.nationality =
+                        "BGD";
+
+                }
 
             }
 
@@ -1483,9 +1230,11 @@ app.post(
                 "================================="
             );
 
+
             console.log(
                 "FULL EXTRACTED DATA:"
             );
+
 
             console.log(
                 JSON.stringify(
@@ -1494,6 +1243,7 @@ app.post(
                     2
                 )
             );
+
 
             console.log(
                 "================================="
@@ -1508,17 +1258,15 @@ app.post(
                     "Full Passport OCR completed",
 
                 version:
-                    "5.0.0",
+                    "5.1.0",
 
                 mode:
                     "FULL MRZ + NON-MRZ",
 
                 data:
-
                     data,
 
                 rawText:
-
                     rawText
 
             });
@@ -1558,13 +1306,14 @@ app.post(
 const PORT =
     process.env.PORT || 3000;
 
+
 app.listen(
     PORT,
     "0.0.0.0",
     () => {
 
         console.log(
-            `ARIF VISA API SERVER v5.0 RUNNING ON PORT ${PORT}`
+            `ARIF VISA API SERVER v5.1 RUNNING ON PORT ${PORT}`
         );
 
     }
